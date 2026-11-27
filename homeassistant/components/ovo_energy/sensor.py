@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Final
 
 from ovoenergy import OVODailyUsage
+from ovoenergy.models import OVODailyElectricity, OVODailyGas
 from ovoenergy.ovoenergy import OVOEnergy
 
 from homeassistant.components.sensor import (
@@ -30,7 +31,22 @@ SCAN_INTERVAL = timedelta(seconds=300)
 PARALLEL_UPDATES = 4
 
 KEY_LAST_ELECTRICITY_COST: Final = "last_electricity_cost"
+KEY_ELECTRICITY_UNIT_RATE: Final = "electricity_unit_rate"
+KEY_ELECTRICITY_STANDING_CHARGE: Final = "electricity_standing_charge"
 KEY_LAST_GAS_COST: Final = "last_gas_cost"
+KEY_GAS_UNIT_RATE: Final = "gas_unit_rate"
+KEY_GAS_STANDING_CHARGE: Final = "gas_standing_charge"
+
+
+def _latest_rate(
+    usage: list[OVODailyElectricity] | list[OVODailyGas], rate: str
+) -> float | None:
+    """Return the most recent non-empty rate from the usage intervals."""
+    for interval in reversed(usage):
+        if interval is not None and interval.rates is not None:
+            if (value := getattr(interval.rates, rate)) is not None:
+                return value
+    return None
 
 
 @dataclass
@@ -57,6 +73,16 @@ SENSOR_TYPES_ELECTRICITY: tuple[OVOEnergySensorEntityDescription, ...] = (
         value=lambda usage: usage.electricity[-1].cost.amount
         if usage.electricity[-1].cost is not None
         else None,
+    ),
+    OVOEnergySensorEntityDescription(
+        key=KEY_ELECTRICITY_UNIT_RATE,
+        name="OVO Electricity Unit Rate",
+        value=lambda usage: _latest_rate(usage.electricity, "anytime"),
+    ),
+    OVOEnergySensorEntityDescription(
+        key=KEY_ELECTRICITY_STANDING_CHARGE,
+        name="OVO Electricity Standing Charge",
+        value=lambda usage: _latest_rate(usage.electricity, "standing"),
     ),
     OVOEnergySensorEntityDescription(
         key="last_electricity_start_time",
@@ -95,6 +121,18 @@ SENSOR_TYPES_GAS: tuple[OVOEnergySensorEntityDescription, ...] = (
         else None,
     ),
     OVOEnergySensorEntityDescription(
+        key=KEY_GAS_UNIT_RATE,
+        name="OVO Gas Unit Rate",
+        icon="mdi:cash-multiple",
+        value=lambda usage: _latest_rate(usage.gas, "anytime"),
+    ),
+    OVOEnergySensorEntityDescription(
+        key=KEY_GAS_STANDING_CHARGE,
+        name="OVO Gas Standing Charge",
+        icon="mdi:cash-multiple",
+        value=lambda usage: _latest_rate(usage.gas, "standing"),
+    ),
+    OVOEnergySensorEntityDescription(
         key="last_gas_start_time",
         name="OVO Last Gas Start Time",
         entity_registry_enabled_default=False,
@@ -111,6 +149,22 @@ SENSOR_TYPES_GAS: tuple[OVOEnergySensorEntityDescription, ...] = (
 )
 
 
+def _set_rate_unit(
+    description: OVOEnergySensorEntityDescription,
+    usage: list[OVODailyElectricity] | list[OVODailyGas],
+) -> None:
+    """Set the currency unit on rate sensors from the latest cost."""
+    cost = usage[-1].cost if usage[-1] is not None else None
+    if cost is None or cost.currency_unit is None:
+        return
+    if description.key.endswith("_unit_rate"):
+        description.native_unit_of_measurement = (
+            f"{cost.currency_unit}/{UnitOfEnergy.KILO_WATT_HOUR}"
+        )
+    elif description.key.endswith("_standing_charge"):
+        description.native_unit_of_measurement = f"{cost.currency_unit}/day"
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -125,6 +179,7 @@ async def async_setup_entry(
     if coordinator.data:
         if coordinator.data.electricity:
             for description in SENSOR_TYPES_ELECTRICITY:
+                _set_rate_unit(description, coordinator.data.electricity)
                 if (
                     description.key == KEY_LAST_ELECTRICITY_COST
                     and coordinator.data.electricity[-1] is not None
@@ -136,6 +191,7 @@ async def async_setup_entry(
                 entities.append(OVOEnergySensor(coordinator, description, client))
         if coordinator.data.gas:
             for description in SENSOR_TYPES_GAS:
+                _set_rate_unit(description, coordinator.data.gas)
                 if (
                     description.key == KEY_LAST_GAS_COST
                     and coordinator.data.gas[-1] is not None
