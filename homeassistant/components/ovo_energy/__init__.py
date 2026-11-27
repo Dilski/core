@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceEntryType
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import (
@@ -31,13 +32,14 @@ PLATFORMS = [Platform.SENSOR]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up OVO Energy from a config entry."""
 
-    client = OVOEnergy()
+    client = OVOEnergy(async_get_clientsession(hass))
+    if entry.data.get(CONF_ACCOUNT):
+        client.custom_account_id = int(entry.data[CONF_ACCOUNT])
 
     try:
         authenticated = await client.authenticate(
             entry.data[CONF_USERNAME],
             entry.data[CONF_PASSWORD],
-            entry.data[CONF_ACCOUNT],
         )
     except aiohttp.ClientError as exception:
         _LOGGER.warning(exception)
@@ -53,7 +55,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 authenticated = await client.authenticate(
                     entry.data[CONF_USERNAME],
                     entry.data[CONF_PASSWORD],
-                    entry.data[CONF_ACCOUNT],
                 )
             except aiohttp.ClientError as exception:
                 raise UpdateFailed(exception) from exception
